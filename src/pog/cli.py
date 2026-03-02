@@ -91,12 +91,45 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
     if args.no_build:
         log("Build: disabled via --no-build.")
-    else:
-        log("Build: interactive prompt will be added in the next slice.")
+        log("Slice 4 complete: C# file generated.")
+        return 0
 
-    log("Slice 3 complete: C# file generated.")
-    return 0
-    return 0
+    # Slice 4: interactive build prompt
+    answer = input("Run 'dotnet build' now? (y/N): ").strip().lower()
+    if answer not in ("y", "yes"):
+        log("Build: skipped by user.")
+        log("Slice 4 complete: C# file generated.")
+        return 0
+
+    from .tools.dotnet_build import run_dotnet_build
+
+    log("Build: running dotnet build…")
+    result = run_dotnet_build(sln)
+
+    if result.success:
+        log("Build: SUCCESS ✅")
+        log("Slice 4 complete: C# file generated and solution builds.")
+        return 0
+
+    log(f"Build: FAILED (exit code {result.returncode})")
+    # Keep output readable: show tail of stdout/stderr
+    tail_len = 2000
+    if result.stdout:
+        log("dotnet build stdout (tail):")
+        print(result.stdout[-tail_len:])
+    if result.stderr:
+        log("dotnet build stderr (tail):")
+        print(result.stderr[-tail_len:])
+
+    # Bounded repair loop scaffold (no-op for now)
+    max_repairs = 2
+    for attempt in range(1, max_repairs + 1):
+        log(f"Repair attempt {attempt}/{max_repairs}: not implemented yet (placeholder).")
+        log("Once LLM repair is implemented, this will modify the generated file and rebuild.")
+        break
+
+    log("Slice 4 complete: C# file generated, build attempted.")
+    return 3
 
 
 def main(argv: list[str] | None = None) -> int:
