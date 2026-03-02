@@ -71,12 +71,31 @@ def cmd_generate(args: argparse.Namespace) -> int:
         f"toggleSwitch={snapshot['markers']['has_toggle_switch']}"
     )
 
-    if args.no_build:
-        log("Build: disabled via --no-build (later slice will skip build entirely).")
-    else:
-        log("Build: interactive prompt will be added in a later slice.")
+    # Slice 3: Generate + write a generic C# POM (no LLM yet)
+    from .codegen.generic_pom import generate_generic_pom
+    from .tools.file_writer import write_text_file
 
-    log("Slice 2 complete (capture + snapshot). No POM code generated yet.")
+    out_path = (Path.cwd() / f"{args.page_name}.cs").resolve()
+
+    log("Generating generic C# POM (heuristic, no refs-based style yet)…")
+    code = generate_generic_pom(
+        page_name=args.page_name,
+        url=captured.url_final,
+        snapshot=snapshot,
+        namespace="PageObjects",
+        max_elements=12,
+    )
+
+    log(f"Writing: {out_path}")
+    write_text_file(out_path, code)
+
+    if args.no_build:
+        log("Build: disabled via --no-build.")
+    else:
+        log("Build: interactive prompt will be added in the next slice.")
+
+    log("Slice 3 complete: C# file generated.")
+    return 0
     return 0
 
 
