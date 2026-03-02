@@ -46,12 +46,37 @@ def cmd_generate(args: argparse.Namespace) -> int:
     else:
         log("No reference files provided: will generate a generic POM style (later slice).")
 
+    # Slice 2: Capture + bounded DOM snapshot
+    from .tools.selenium_capture import capture_page
+    from .tools.dom_simplify import simplify_dom_snapshot
+
+    log("Launching browser (headless) and navigating…")
+    captured = capture_page(args.url, headless=True)
+    log(f"Navigation complete. Final URL: {captured.url_final}")
+    log(f"Page title: {captured.title!r}")
+    log(f"Captured HTML size: {len(captured.html)} chars")
+
+    log("Building bounded DOM snapshot…")
+    snapshot = simplify_dom_snapshot(captured.html)
+    snapshot["page"]["title"] = captured.title
+
+    log(
+        f"DOM snapshot: {len(snapshot['elements'])} interactive elements "
+        f"(truncated={snapshot['limits']['truncated']})"
+    )
+    log(
+        "Markers: "
+        f"jsgrid={snapshot['markers']['has_jsgrid_table']}, "
+        f"select2={snapshot['markers']['has_select2']}, "
+        f"toggleSwitch={snapshot['markers']['has_toggle_switch']}"
+    )
+
     if args.no_build:
         log("Build: disabled via --no-build (later slice will skip build entirely).")
     else:
         log("Build: interactive prompt will be added in a later slice.")
 
-    log("Skeleton complete (no code generated yet).")
+    log("Slice 2 complete (capture + snapshot). No POM code generated yet.")
     return 0
 
 
