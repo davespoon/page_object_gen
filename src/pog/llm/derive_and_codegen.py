@@ -90,3 +90,66 @@ def generate_pom_with_style(
         temperature=0.1,
     )
     return resp.choices[0].message.content or ""
+
+
+def repair_pom_from_build_errors(
+        *,
+        page_name: str,
+        current_code: str,
+        build_stdout: str,
+        build_stderr: str,
+        style_contract: dict[str, Any] | None,
+) -> str:
+    client = get_client()
+    model = get_model()
+
+    # Keep prompt bounded (avoid huge tool output)
+    def tail(s: str, n: int = 6000) -> str:
+        s = s or ""
+        return s if len(s) <= n else ("…[TRUNCATED]…\n" + s[-n:])
+
+    system = (
+        "You fix C# compilation errors in a generated Page Object file. "
+        "Output must be a SINGLE corrected C# file. No markdown, no explanation.\n"
+        "Constraints:\n"
+        "- Keep the class name exactly as provided.\n"
+        "- Do not remove public methods unless necessary for compilation.\n"
+        "- Prefer minimal changes: add missing usings, fix types, fix syntax, adjust namespace if needed.\n"
+        "- If a Style Contract is provided, follow it when possible.\n"
+    )
+
+    user = (
+        f"Class name must remain exactly: {page_name}\n\n"
+        "Here is the current C# file:\n"
+        "----- BEGIN C# -----\n"
+        f"{current_code}\n"
+        "----- END C# -----\n\n"
+        "dotnet build output (stdout tail):\n"
+        "----- BEGIN STDOUT -----\n"
+        f"{tail(build_stdout)}\n"
+        "----- END STDOUT -----\n\n"
+        "dotnet build output (stderr tail):\n"
+        "----- BEGIN STDERR -----\n"
+        f"{tail(build_stderr)}\n"
+        "----- END STDERR -----\n\n"
+    )
+
+    if style_contract is not None:
+        user += (
+            "STYLE CONTRACT JSON (may be partial; use it as guidance):\n"
+            "----- BEGIN STYLE CONTRACT -----\n"
+            f"{json.dumps(style_contract)[:120000]}\n"
+            "----- END STYLE CONTRACT -----\n\n"
+        )
+
+    user += "Return ONLY the corrected C# file content."
+
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "developer", "content": system},
+            {"role": "user", "content": user},
+        ],
+        temperature=0.1,
+    )
+    return resp.choices[0].message.content or ""

@@ -148,14 +148,54 @@ def cmd_generate(args: argparse.Namespace) -> int:
         log("dotnet build stderr (tail):")
         print(result.stderr[-tail_len:])
 
-    # Bounded repair loop scaffold (no-op for now)
+    # Slice 6 (this step): bounded LLM repair loop
     max_repairs = 2
-    for attempt in range(1, max_repairs + 1):
-        log(f"Repair attempt {attempt}/{max_repairs}: not implemented yet (placeholder).")
-        log("Once LLM repair is implemented, this will modify the generated file and rebuild.")
-        break
 
-    log("Slice 4 complete: C# file generated, build attempted.")
+    # style_contract exists only if refs were used; otherwise keep None
+    style_contract_for_repair = None
+    try:
+        # if you generated via refs, you likely have style_contract variable in scope
+        style_contract_for_repair = style_contract  # type: ignore[name-defined]
+    except Exception:
+        style_contract_for_repair = None
+
+    from .llm.derive_and_codegen import repair_pom_from_build_errors
+    from .tools.file_writer import write_text_file
+
+    for attempt in range(1, max_repairs + 1):
+        log(f"Repair attempt {attempt}/{max_repairs}: asking OpenAI to fix compilation errors…")
+
+        current_code = out_path.read_text(encoding="utf-8", errors="replace")
+        repaired = repair_pom_from_build_errors(
+            page_name=args.page_name,
+            current_code=current_code,
+            build_stdout=result.stdout,
+            build_stderr=result.stderr,
+            style_contract=style_contract_for_repair,
+        )
+
+        if not repaired.strip():
+            log("Repair returned empty output. Stopping.")
+            break
+
+        write_text_file(out_path, repaired)
+        log("Repaired file written. Rebuilding…")
+
+        result = run_dotnet_build(sln)
+        if result.success:
+            log(f"Build: SUCCESS after repair {attempt}/{max_repairs} ✅")
+            log("Slice complete: C# file generated and solution builds.")
+            return 0
+
+        log(f"Build still failing after repair {attempt}/{max_repairs} (exit code {result.returncode}).")
+        if result.stdout:
+            log("dotnet build stdout (tail):")
+            print(result.stdout[-tail_len:])
+        if result.stderr:
+            log("dotnet build stderr (tail):")
+            print(result.stderr[-tail_len:])
+
+    log("Build failed after max repair attempts.")
     return 3
 
 
