@@ -77,14 +77,41 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
     out_path = (Path.cwd() / f"{args.page_name}.cs").resolve()
 
-    log("Generating generic C# POM (heuristic, no refs-based style yet)…")
-    code = generate_generic_pom(
-        page_name=args.page_name,
-        url=captured.url_final,
-        snapshot=snapshot,
-        namespace="PageObjects",
-        max_elements=12,
-    )
+    from .tools.file_writer import write_text_file
+
+    out_path = (Path.cwd() / f"{args.page_name}.cs").resolve()
+
+    if args.refs:
+        # Slice 5: refs-based generation via OpenAI
+        from .tools.refs_loader import load_ref_files
+        from .llm.derive_and_codegen import derive_style_contract_from_refs, generate_pom_with_style
+
+        log("Loading reference files…")
+        refs = load_ref_files(args.refs)
+
+        log("Deriving Style Contract (v0.2) from refs via OpenAI…")
+        style_contract = derive_style_contract_from_refs(refs)
+        log("Style Contract derived.")
+
+        log("Generating POM with Style Contract via OpenAI…")
+        code = generate_pom_with_style(
+            page_name=args.page_name,
+            url=captured.url_final,
+            dom_snapshot=snapshot,
+            style_contract=style_contract,
+        )
+    else:
+        # Keep your existing generic heuristic generator
+        from .codegen.generic_pom import generate_generic_pom
+
+        log("Generating generic C# POM (heuristic, no refs)…")
+        code = generate_generic_pom(
+            page_name=args.page_name,
+            url=captured.url_final,
+            snapshot=snapshot,
+            namespace="PageObjects",
+            max_elements=12,
+        )
 
     log(f"Writing: {out_path}")
     write_text_file(out_path, code)
