@@ -1,5 +1,7 @@
 ﻿from __future__ import annotations
 
+import datetime
+import os
 from pathlib import Path
 
 from .state import PogState
@@ -18,6 +20,18 @@ from ..llm.derive_and_codegen import (
 )
 
 
+def _trace(state: PogState, node: str, message: str) -> list[dict]:
+    trace = list(state.get("trace") or [])
+    trace.append(
+        {
+            "ts": datetime.datetime.utcnow().isoformat() + "Z",
+            "node": node,
+            "message": message,
+        }
+    )
+    return trace
+
+
 def node_resolve_sln(state: PogState) -> PogState:
     cwd = Path(state["out_dir"]).resolve()
     log(f"Working directory: {cwd}")
@@ -26,10 +40,10 @@ def node_resolve_sln(state: PogState) -> PogState:
     if sln is None:
         log("ERROR: No .sln found in current or parent directories.")
         log("Run `pog` from within a repo containing a .sln.")
-        return {"sln_path": None, "exit_code": 2}
+        return {"sln_path": None, "exit_code": 2, "trace": _trace(state, "resolve_sln", "No .sln found")}
 
     log(f"Found solution: {sln}")
-    return {"sln_path": str(sln), "exit_code": 0}
+    return {"sln_path": str(sln), "exit_code": 0, "trace": _trace(state, "resolve_sln", f"Found {sln.name}")}
 
 
 def node_capture(state: PogState) -> PogState:
@@ -42,6 +56,7 @@ def node_capture(state: PogState) -> PogState:
         "url_final": captured.url_final,
         "title": captured.title,
         "html": captured.html,
+        "trace": _trace(state, "capture", f"Captured title={captured.title!r}, html_len={len(captured.html)}"),
     }
 
 
@@ -59,14 +74,22 @@ def node_snapshot(state: PogState) -> PogState:
         f"select2={snapshot['markers']['has_select2']}, "
         f"toggleSwitch={snapshot['markers']['has_toggle_switch']}"
     )
-    return {"dom_snapshot": snapshot}
+    return {
+        "dom_snapshot": snapshot,
+        "trace": _trace(
+            state,
+            "snapshot",
+            f"elements={len(snapshot['elements'])}, truncated={snapshot['limits']['truncated']}, "
+            f"markers={snapshot['markers']}",
+        ),
+    }
 
 
 def node_style_contract_if_refs(state: PogState) -> PogState:
     refs = state.get("refs") or []
     if not refs:
         log("No reference files provided: will use generic POM style.")
-        return {"style_contract": None}
+        return {"style_contract": None, "trace": _trace(state, "style_contract", "No refs; style_contract=None")}
 
     log(f"Loading reference files… ({len(refs)})")
     loaded = load_ref_files(refs)
@@ -74,7 +97,10 @@ def node_style_contract_if_refs(state: PogState) -> PogState:
     log("Deriving Style Contract (v0.2) from refs via OpenAI…")
     style_contract = derive_style_contract_from_refs(loaded)
     log("Style Contract derived.")
-    return {"style_contract": style_contract}
+    return {
+        "style_contract": style_contract,
+        "trace": _trace(state, "style_contract", f"Derived style contract from {len(refs)} refs"),
+    }
 
 
 def node_codegen(state: PogState) -> PogState:
@@ -103,19 +129,27 @@ def node_codegen(state: PogState) -> PogState:
     log(f"Writing: {out_path}")
     write_text_file(out_path, code)
 
-    return {"generated_code": code, "out_path": str(out_path)}
+    return {
+        "generated_code": code,
+        "out_path": str(out_path),
+        "trace": _trace(state, "codegen", f"Wrote {out_path.name} ({len(code)} chars)"),
+    }
 
 
 def node_build_gate(state: PogState) -> PogState:
     if state.get("no_build", False):
         log("Build: disabled via --no-build.")
-        return {"wants_build": False, "build_ran": False}
+        return {"wants_build": False, "build_ran": False, "trace": _trace(state, "build_gate", "no_build=True")}
 
     answer = input("Run 'dotnet build' now? (y/N): ").strip().lower()
     wants = answer in ("y", "yes")
     if not wants:
         log("Build: skipped by user.")
-    return {"wants_build": wants, "build_ran": wants}
+    return {
+        "wants_build": wants,
+        "build_ran": wants,
+        "trace": _trace(state, "build_gate", f"user_wants_build={wants}"),
+    }
 
 
 def node_build_and_repair(state: PogState) -> PogState:
@@ -126,6 +160,7 @@ def node_build_and_repair(state: PogState) -> PogState:
             "build_stdout": "",
             "build_stderr": "",
             "repairs_used": 0,
+            "trace": _trace(state, "build_and_repair", "Build skipped"),
         }
 
     sln_path = state.get("sln_path")
@@ -143,6 +178,7 @@ def node_build_and_repair(state: PogState) -> PogState:
             "build_stdout": result.stdout,
             "build_stderr": result.stderr,
             "repairs_used": 0,
+            "trace": _trace(state, "build_and_repair", "Build success (no repairs)"),
         }
 
     log(f"Build: FAILED (exit code {result.returncode})")
@@ -191,6 +227,7 @@ def node_build_and_repair(state: PogState) -> PogState:
                 "build_stdout": result.stdout,
                 "build_stderr": result.stderr,
                 "repairs_used": repairs_used,
+                "trace": _trace(state, "build_and_repair", f"Build success after repairs_used={repairs_used}"),
             }
 
         log(f"Build still failing after repair {attempt}/{max_repairs} (exit code {result.returncode}).")
@@ -207,6 +244,7 @@ def node_build_and_repair(state: PogState) -> PogState:
         "build_stdout": result.stdout,
         "build_stderr": result.stderr,
         "repairs_used": repairs_used,
+        "trace": _trace(state, "build_and_repair", f"Build failed after repairs_used={repairs_used}"),
     }
 
 
@@ -223,4 +261,18 @@ def node_finalize(state: PogState) -> PogState:
         return {"exit_code": 3}
 
     log("Final: build was not run.")
+
+    # Optional trace dump (local-first): set POG_TRACE=1 to write a file.
+    if os.getenv("POG_TRACE", "").strip() in ("1", "true", "TRUE", "yes", "YES"):
+        from ..tools.trace_writer import write_trace_file
+
+        try:
+            out_dir = Path(state["out_dir"])
+            run_id = state.get("run_id", "unknown")
+            trace = list(state.get("trace") or [])
+            trace_path = write_trace_file(out_dir, run_id, trace)
+            log(f"Trace written: {trace_path}")
+        except Exception as e:
+            log(f"Trace write failed: {e}")
+
     return {"exit_code": 0}

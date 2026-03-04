@@ -38,3 +38,7 @@ class PogState(TypedDict, total=False):
     # Control
     wants_build: bool
     exit_code: int
+
+    # Run metadata + debug trace
+    run_id: str
+    trace: list[dict[str, Any]]
