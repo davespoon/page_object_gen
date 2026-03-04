@@ -15,7 +15,6 @@ from ..codegen.generic_pom import generate_generic_pom
 from ..tools.refs_loader import load_ref_files
 from ..llm.derive_and_codegen import (
     derive_style_contract_from_refs,
-    generate_pom_with_style,
     repair_pom_from_build_errors,
 )
 
@@ -103,36 +102,54 @@ def node_style_contract_if_refs(state: PogState) -> PogState:
     }
 
 
-def node_codegen(state: PogState) -> PogState:
+def node_codegen_generic(state: PogState) -> PogState:
     out_dir = Path(state["out_dir"]).resolve()
     out_path = (out_dir / f"{state['page_name']}.cs").resolve()
 
-    refs = state.get("refs") or []
-    if refs:
-        log("Generating POM with Style Contract via OpenAI…")
-        code = generate_pom_with_style(
-            page_name=state["page_name"],
-            url=state.get("url_final") or state["url"],
-            dom_snapshot=state["dom_snapshot"] or {},
-            style_contract=state.get("style_contract") or {},
-        )
-    else:
-        log("Generating generic C# POM (heuristic, no refs)…")
-        code = generate_generic_pom(
-            page_name=state["page_name"],
-            url=state.get("url_final") or state["url"],
-            snapshot=state.get("dom_snapshot") or {},
-            namespace="PageObjects",
-            max_elements=12,
-        )
+    log("Generating generic C# POM (heuristic, no refs)…")
+    code = generate_generic_pom(
+        page_name=state["page_name"],
+        url=state.get("url_final") or state["url"],
+        snapshot=state.get("dom_snapshot") or {},
+        namespace="PageObjects",
+        max_elements=12,
+    )
 
     log(f"Writing: {out_path}")
     write_text_file(out_path, code)
 
+    return {"generated_code": code, "out_path": str(out_path),
+            "trace": _trace(state, "codegen_generic", f"Wrote {out_path.name}")}
+
+
+def node_codegen_refs_agent(state: PogState) -> PogState:
+    from .refs_agent import run_refs_codegen_agent
+
+    refs = state.get("refs") or []
+    out_dir = Path(state["out_dir"]).resolve()
+
+    log("Refs mode: running LangGraph tool agent (ToolNode + tools_condition)…")
+    summary = run_refs_codegen_agent(
+        url_final=state.get("url_final") or state["url"],
+        page_name=state["page_name"],
+        out_dir=out_dir,
+        dom_snapshot=state.get("dom_snapshot") or {},
+        refs_paths=refs,
+        recursion_limit=20,
+    )
+
+    out_path = Path(summary["out_path"]).resolve()
+    style_contract = summary.get("style_contract")
+
+    # Read back code for downstream repair loop
+    code = out_path.read_text(encoding="utf-8", errors="replace")
+
+    log(f"Agent wrote: {out_path}")
     return {
-        "generated_code": code,
         "out_path": str(out_path),
-        "trace": _trace(state, "codegen", f"Wrote {out_path.name} ({len(code)} chars)"),
+        "generated_code": code,
+        "style_contract": style_contract,
+        "trace": _trace(state, "codegen_refs_agent", f"Wrote {out_path.name} via ToolNode agent"),
     }
 
 
